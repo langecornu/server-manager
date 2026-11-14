@@ -1,0 +1,9 @@
+node_modules/
+.DS_Store
+.env
+
+# Local data: saved names and icons, settings, and the HTTPS certificate authority's private key.
+data/
+
+# Editor and tool folders
+.claude/

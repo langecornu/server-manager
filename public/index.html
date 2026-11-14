@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Server Manager</title>
+    <meta name="description" content="Every local app running on this computer, with its port and a link to open it." />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="glow glow-a"></div>
+    <div class="glow glow-b"></div>
+
+    <div class="shell">
+      <nav class="topbar">
+        <div class="brand">
+          <span class="logo" id="logo"></span>
+          <span class="brand-name">Server Manager</span>
+        </div>
+        <div class="topbar-right">
+          <span class="pill" id="status"><i class="dot"></i> <span>Scanning…</span></span>
+          <div class="seg" role="group" aria-label="What to show">
+            <button type="button" data-scope="node" title="Only Node apps">Node apps</button>
+            <button type="button" data-scope="all" title="Everything listening on a port, Node or not">Everything</button>
+          </div>
+          <button type="button" class="btn small" id="hidden-toggle" aria-pressed="false"><span id="hidden-icon"></span><span id="hidden-label">Show hidden</span></button>
+          <button type="button" class="btn small" id="refresh" title="Check now for apps that started or stopped"><span id="refresh-icon"></span><span id="refresh-label">Refresh</span></button>
+          <button type="button" class="icon-btn" id="settings-btn" aria-label="Settings" title="Settings: port, network access, HTTPS"></button>
+        </div>
+      </nav>
+
+      <header class="hero">
+        <p class="eyebrow" id="eyebrow">&nbsp;</p>
+        <h1>Every local app, <em>one front door.</em></h1>
+        <p class="lede">What is running on this computer right now, which port it is on, and a link to open it. Bookmark this page and stop memorising port numbers.</p>
+      </header>
+
+      <label class="url-field search">
+        <span class="lead" id="search-icon"></span>
+        <input id="search" type="search" placeholder="Find an app by name, folder or port" autocomplete="off" spellcheck="false" />
+        <kbd>/</kbd>
+      </label>
+
+      <main>
+        <div class="grid" id="apps" aria-live="polite"></div>
+      </main>
+
+      <section id="stopped-section" hidden>
+        <div class="activity-head">
+          <h2>Not running</h2>
+          <span class="count" id="stopped-count">0</span>
+          <span class="head-note" id="stopped-note"></span>
+        </div>
+        <div class="grid" id="stopped"></div>
+      </section>
+
+      <footer>Refreshes every few seconds. Names and descriptions come from each project's page title, <code>package.json</code> and README; use the pencil on a card to set your own.</footer>
+    </div>
+
+    <dialog class="modal" id="edit">
+      <form class="modal-card" method="dialog" id="edit-form">
+        <div class="modal-head">
+          <div>
+            <h2>Edit app</h2>
+            <p id="edit-path"></p>
+          </div>
+          <button type="button" class="icon-btn" id="edit-close" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="field">
+            <span class="field-label">Icon</span>
+            <div class="icon-edit">
+              <div class="art" id="edit-preview"></div>
+              <button type="button" class="btn small" id="edit-upload">Upload image</button>
+              <span class="field-box emoji-box" title="Or type an emoji"><input id="edit-emoji" maxlength="8" placeholder="or emoji" autocomplete="off" aria-label="Emoji icon" /></span>
+              <button type="button" class="link-btn" id="edit-icon-clear">Use the app's own</button>
+              <input type="file" id="edit-file" accept="image/*" hidden />
+            </div>
+          </div>
+          <label class="field">
+            <span class="field-label">Name</span>
+            <span class="field-box"><input id="edit-name" maxlength="60" autocomplete="off" /></span>
+          </label>
+          <label class="field">
+            <span class="field-label">Description</span>
+            <textarea id="edit-description" rows="3" maxlength="300"></textarea>
+          </label>
+          <p class="fineprint">Leave a field empty to use what was detected. Without an image or emoji, the app's own favicon is shown.</p>
+          <p class="error" id="edit-error" hidden></p>
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn ghost" id="edit-reset">Use detected</button>
+          <span class="spacer"></span>
+          <button type="button" class="btn ghost" id="edit-cancel">Cancel</button>
+          <button type="submit" class="btn primary">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog class="modal" id="settings">
+      <form class="modal-card" method="dialog" id="settings-form">
+        <div class="modal-head">
+          <div>
+            <h2>Settings</h2>
+            <p class="plain">How Server Manager itself is reached</p>
+          </div>
+          <button type="button" class="icon-btn" id="settings-close" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="notice warn" id="set-locked" hidden>These settings can only be changed on the computer Server Manager runs on.</div>
+          <label class="field port-field">
+            <span class="field-label">Port</span>
+            <span class="field-box"><input id="set-port" type="number" min="1024" max="65535" step="1" inputmode="numeric" required /></span>
+          </label>
+          <div class="field">
+            <span class="field-label">Who can open it</span>
+            <div class="seg wide" id="set-lan" role="group" aria-label="Who can open it">
+              <button type="button" data-lan="0">This computer only</button>
+              <button type="button" data-lan="1">Local network</button>
+            </div>
+            <p class="fineprint" id="set-lan-note"></p>
+          </div>
+          <label class="switch">
+            <input type="checkbox" id="set-https" />
+            <span class="knob"></span>
+            <span class="switch-text">Use HTTPS<small>Self-signed certificate that renews itself. Browsers warn the first time.</small></span>
+          </label>
+          <p class="fineprint" id="set-cert" hidden></p>
+          <div class="field">
+            <span class="field-label">Addresses</span>
+            <ul class="urls" id="set-urls"></ul>
+          </div>
+          <p class="error" id="set-error" hidden></p>
+        </div>
+        <div class="modal-foot">
+          <span class="spacer"></span>
+          <button type="button" class="btn ghost" id="settings-cancel">Cancel</button>
+          <button type="submit" class="btn primary" id="settings-save">Save and restart</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

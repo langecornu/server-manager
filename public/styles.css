@@ -117,7 +117,7 @@ kbd { font: 600 11.5px var(--mono); color: var(--faint); border: 1px solid var(-
 /* ───────────────────────── App cards ───────────────────────── */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 350px), 1fr)); gap: 18px; align-items: start; }
 .card, .empty-state { background: linear-gradient(180deg, var(--surface-hi), var(--surface)); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, 0.04); backdrop-filter: blur(18px); }
-.app { padding: 18px; display: grid; gap: 16px; min-width: 0; animation: rise .35s ease both; transition: border-color .15s, transform .15s; }
+.app { padding: 18px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; min-width: 0; animation: rise .35s ease both; transition: border-color .15s, transform .15s; }
 .app:hover { border-color: var(--line-strong); }
 @keyframes rise { from { opacity: 0; transform: translateY(10px); } }
 
@@ -162,7 +162,14 @@ a.port:hover { border-color: var(--accent); transform: translateY(-1px); }
 .app.is-hidden { border-style: dashed; border-color: var(--line-strong); }
 .chip.hid { color: var(--amber); border-color: color-mix(in srgb, var(--amber) 40%, transparent); background: color-mix(in srgb, var(--amber) 10%, transparent); }
 .btn.small.on { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, transparent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.btn.small.start { padding: 5px 12px 5px 10px; }
+.btn.small.start:disabled { opacity: 0.75; }
+.dot-pulse { width: 8px; height: 8px; margin: 0 3px; border-radius: 50%; background: currentColor; animation: pulse 1.2s ease-in-out infinite; }
+.start-error { padding: 10px 12px; border-radius: var(--radius-sm); border: 1px solid color-mix(in srgb, var(--red) 45%, transparent); background: color-mix(in srgb, var(--red) 9%, transparent); font-size: 12.5px; }
+.start-error strong { display: block; color: var(--red); font-weight: 650; }
+.start-error pre { margin: 6px 0 0; padding: 0; border: 0; background: none; max-height: 150px; overflow: auto; font: 11.5px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; color: var(--muted); }
 .app.stopped { opacity: 0.72; }
+.app.stopped:has(.start-error) { opacity: 1; }
 .app.stopped:hover { opacity: 1; }
 .app.stopped .art { filter: grayscale(0.85); }
 .app.stopped .port-num { color: var(--muted); }

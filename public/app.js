@@ -29,6 +29,7 @@ const ICONS = {
   gear: svg('<circle cx="12" cy="12" r="3"/><path d="M19.4 13.5a7.6 7.6 0 0 0 0-3l2-1.5-2-3.4-2.3.9a7.6 7.6 0 0 0-2.6-1.5L14 2.5h-4l-.5 2.5a7.6 7.6 0 0 0-2.6 1.5l-2.3-.9-2 3.4 2 1.5a7.6 7.6 0 0 0 0 3l-2 1.5 2 3.4 2.3-.9a7.6 7.6 0 0 0 2.6 1.5l.5 2.5h4l.5-2.5a7.6 7.6 0 0 0 2.6-1.5l2.3.9 2-3.4z"/>'),
   eye: svg('<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>'),
   eyeOff: svg('<path d="M4 4l16 16"/><path d="M9.5 5.9A9.6 9.6 0 0 1 12 5.5c6 0 9.5 6.5 9.5 6.5a16 16 0 0 1-3 3.7M6.3 7.6A16 16 0 0 0 2.5 12S6 18.5 12 18.5c1.5 0 2.8-.4 4-1"/><path d="M9.9 9.9a2.8 2.8 0 0 0 4 4"/>'),
+  play: svg('<path d="M8 5.5v13l11-6.5z"/>'),
   plug: svg('<path d="M9 3v5M15 3v5"/><path d="M6 8h12v3a6 6 0 0 1-12 0V8z"/><path d="M12 17v4"/>'),
 };
 
@@ -169,6 +170,56 @@ function portRow(p, app) {
     num, meta, h('span', { class: 'go' }, 'Open', h('span', { icon: 'arrow' })));
 }
 
+const starting = new Set(); // apps whose Start was just clicked
+const startErrors = new Map(); // app id -> message from a refused start
+
+function startButton(app) {
+  const busy = Boolean(app.starting) || starting.has(app.id);
+  return h('button', {
+    type: 'button',
+    class: 'btn small primary start',
+    disabled: busy,
+    title: `Runs ${app.startCommand} in ${app.rootLabel}`,
+    onclick: () => startApp(app),
+  }, busy ? h('span', { class: 'dot-pulse' }) : h('span', { icon: 'play' }), busy ? 'Starting…' : 'Start');
+}
+
+function startNotice(app) {
+  const message = startErrors.get(app.id);
+  if (message) return h('div', { class: 'notice warn' }, message);
+  const f = app.failed;
+  if (!f) return null;
+  const why = f.error || (f.code !== null ? `${f.command} stopped right away (exit code ${f.code}).` : `${f.command} was stopped (${f.signal}).`);
+  return h('div', { class: 'start-error' }, h('strong', {}, why), f.tail.length ? h('pre', {}, f.tail.join('\n')) : null);
+}
+
+async function startApp(app) {
+  startErrors.delete(app.id);
+  starting.add(app.id);
+  render();
+  try {
+    const res = await fetch(`/api/apps/${app.id}/start`, { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || 'Could not start it.');
+  } catch (e) {
+    starting.delete(app.id);
+    startErrors.set(app.id, e.message);
+    render();
+    return;
+  }
+  // Check quickly for up to a minute: until it is listening, or has stopped again.
+  const end = Date.now() + 60000;
+  while (Date.now() < end) {
+    await new Promise((r) => setTimeout(r, 1200));
+    await load(false);
+    if (data.apps.some((a) => a.id === app.id)) break;
+    const now = data.stopped.find((a) => a.id === app.id);
+    if (!now || now.failed) break;
+  }
+  starting.delete(app.id);
+  render();
+}
+
 function card(app) {
   const oldest = Math.min(...app.ports.map((p) => p.started || Infinity));
   const foot = h('div', { class: 'app-foot' });
@@ -189,6 +240,8 @@ function card(app) {
     foot.append(h('button', { type: 'button', class: 'link-btn danger', title: 'Hide from this list. It comes back the next time it runs, or use Show hidden at the top.', onclick: () => setHidden(app, true) }, 'Hide'));
   }
 
+  if (!app.running && app.startCommand && data.self.canConfigure) foot.prepend(startButton(app));
+
   return h('article', { class: `card app${app.running ? '' : ' stopped'}${app.hidden ? ' is-hidden' : ''}` },
     h('div', { class: 'app-top' },
       art(app),
@@ -199,6 +252,7 @@ function card(app) {
       h('button', { type: 'button', class: 'icon-btn small edit', icon: 'pencil', 'aria-label': `Edit ${app.name}`, title: 'Edit name, description and icon', onclick: () => openEdit(app) }),
     ),
     h('div', { class: 'ports' }, app.ports.map((p) => portRow(p, app))),
+    startNotice(app),
     foot,
   );
 }

@@ -64,11 +64,30 @@ async function waitFor(fn, ms = 10000) {
 test('server', async (t) => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'server-manager-test-'));
   const port = await freePort();
+
+  // Two small projects the server will find, one that starts and one that fails straight away.
+  const projects = path.join(dataDir, 'projects');
+  const appPort = await freePort();
+  const project = (name, scripts) => {
+    fs.mkdirSync(path.join(projects, name), { recursive: true });
+    fs.writeFileSync(path.join(projects, name, 'package.json'), JSON.stringify({ name, description: `${name} for the tests`, scripts }));
+  };
+  project('works-app', { dev: `node -e "require('http').createServer((q,r)=>r.end('ok')).listen(${appPort})"` });
+  project('fails-app', { start: `node -e "console.error('boom: missing config');process.exit(3)"` });
+  project('library', { build: 'echo not an app' });
+
   const child = spawn(process.execPath, [path.join(__dirname, '..', 'server.js')], {
-    env: { ...process.env, DATA_DIR: dataDir, PORT: String(port), SCAN_DIRS: dataDir },
+    env: { ...process.env, DATA_DIR: dataDir, PORT: String(port), SCAN_DIRS: projects },
     stdio: 'ignore',
   });
-  t.after(() => {
+  t.after(async () => {
+    // The app started by the test runs on its own, so it has to be stopped too, while the server can still name it.
+    try {
+      // By now the server may have switched to HTTPS, which answers plain HTTP with a redirect.
+      const inv = (await request('https', port, 'GET', '/api/apps').catch(() => null)) || (await request('http', port, 'GET', '/api/apps').catch(() => null));
+      const listening = inv && inv.json && inv.json.apps.flatMap((a) => a.ports).find((p) => p.port === appPort);
+      if (listening) process.kill(listening.pid);
+    } catch {}
     child.kill();
     fs.rmSync(dataDir, { recursive: true, force: true });
   });
@@ -110,6 +129,52 @@ test('server', async (t) => {
   await t.test('rejects a port that is out of range', async () => {
     const res = await request('http', port, 'PUT', '/api/settings', { body: { port: 80, lan: false, https: false } });
     assert.equal(res.status, 400);
+  });
+
+  await t.test('lists projects that are not running, with the command that starts them', async () => {
+    const inv = await request('http', port, 'GET', '/api/apps');
+    const names = inv.json.stopped.map((a) => a.name);
+    assert.ok(names.includes('Works App'));
+    assert.ok(names.includes('Fails App'));
+    assert.ok(!names.includes('Library'), 'a project without dev, start or serve is not an app');
+    assert.equal(inv.json.stopped.find((a) => a.name === 'Works App').startCommand, 'npm run dev');
+    assert.equal(inv.json.stopped.find((a) => a.name === 'Fails App').startCommand, 'npm start');
+  });
+
+  await t.test('shows why an app failed to start', async () => {
+    const id = (await request('http', port, 'GET', '/api/apps')).json.stopped.find((a) => a.name === 'Fails App').id;
+    const res = await request('http', port, 'POST', `/api/apps/${id}/start`);
+    assert.equal(res.status, 202);
+    const failed = await waitFor(async () => {
+      const app = (await request('http', port, 'GET', '/api/apps')).json.stopped.find((a) => a.id === id);
+      assert.ok(app.failed, 'still starting');
+      return app.failed;
+    });
+    assert.equal(failed.code, 3);
+    assert.ok(failed.tail.some((line) => line.includes('boom: missing config')));
+  });
+
+  await t.test('refuses to start something it does not know, or from another website', async () => {
+    assert.equal((await request('http', port, 'POST', '/api/apps/000000000000/start')).status, 404);
+    assert.equal((await request('http', port, 'POST', '/api/apps/not-an-id/start')).status, 404);
+    const id = (await request('http', port, 'GET', '/api/apps')).json.stopped[0].id;
+    const cross = await request('http', port, 'POST', `/api/apps/${id}/start`, { headers: { origin: 'https://evil.example' } });
+    assert.equal(cross.status, 403);
+  });
+
+  const hasLsof = ['/usr/sbin/lsof', '/usr/bin/lsof'].some((f) => fs.existsSync(f));
+  await t.test('starts an app and then shows it running', { skip: !hasLsof && 'lsof is not installed' }, async () => {
+    const id = (await request('http', port, 'GET', '/api/apps')).json.stopped.find((a) => a.name === 'Works App').id;
+    const res = await request('http', port, 'POST', `/api/apps/${id}/start`);
+    assert.equal(res.status, 202);
+    assert.equal(res.json.command, 'npm run dev');
+    const app = await waitFor(async () => {
+      const found = (await request('http', port, 'GET', '/api/apps')).json.apps.find((a) => a.id === id);
+      assert.ok(found, 'not listening yet');
+      return found;
+    }, 20000);
+    assert.equal(app.ports[0].port, appPort);
+    assert.equal((await request('http', port, 'POST', `/api/apps/${id}/start`)).status, 409, 'cannot be started twice');
   });
 
   await t.test('switches to HTTPS with a certificate, and redirects plain HTTP', async () => {

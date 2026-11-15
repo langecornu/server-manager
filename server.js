@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
-const { execFile } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 
 const net = require('node:net');
 const { execFileSync } = require('node:child_process');
@@ -82,6 +82,8 @@ function saveStore() {
 
 /* ───────────────────────── Process discovery ───────────────────────── */
 
+const LSOF = ['/usr/sbin/lsof', '/usr/bin/lsof'].find((f) => fs.existsSync(f)) || 'lsof';
+
 function run(cmd, args) {
   return new Promise((resolve) => {
     execFile(cmd, args, { maxBuffer: 8 * 1024 * 1024, timeout: 8000, env: { ...process.env, LC_ALL: 'C' } }, (_err, stdout) => resolve(stdout || ''));
@@ -89,7 +91,7 @@ function run(cmd, args) {
 }
 
 async function listListeners() {
-  const out = await run('/usr/sbin/lsof', ['-nP', '+c', '0', '-iTCP', '-sTCP:LISTEN', '-F', 'pcn']);
+  const out = await run(LSOF, ['-nP', '+c', '0', '-iTCP', '-sTCP:LISTEN', '-F', 'pcn']);
   const map = new Map();
   let pid = 0;
   let cmd = '';
@@ -128,7 +130,7 @@ async function processInfo(pids) {
 async function workingDirs(pids) {
   const dirs = new Map();
   if (!pids.length) return dirs;
-  const out = await run('/usr/sbin/lsof', ['-a', '-d', 'cwd', '-Fn', '-p', pids.join(',')]);
+  const out = await run(LSOF, ['-a', '-d', 'cwd', '-Fn', '-p', pids.join(',')]);
   let pid = 0;
   for (const line of out.split('\n')) {
     if (line[0] === 'p') pid = Number(line.slice(1));
@@ -216,6 +218,7 @@ const GENERIC_PACKAGE = /^(web|client|server|app|api|frontend|backend|ui|site|ww
 
 // "web" or "server" says nothing on its own, so borrow the parent folder: "Sem Meter Web".
 function projectName(root, pkgName) {
+  if (/\s/.test(String(pkgName || '').trim())) return String(pkgName).trim(); // a productName is already a display name
   const folder = path.basename(root);
   const squash = (s) => String(s || '').replace(/^@[^/]+\//, '').replace(/[-_. ]/g, '').toLowerCase();
   // package.json names are lowercase; when the folder is the same word with real capitals ("BPMachina"), keep those.
@@ -352,6 +355,85 @@ function catalog() {
   for (const dir of dirs) findProjects(dir, 0, projects);
   catalogCache = { at: Date.now(), dirs, projects };
   return catalogCache;
+}
+
+/* ───────────────────────── Starting an app from the page ───────────────────────── */
+// The page only sends an app's id. The command is always `npm run dev|start|serve`, read from that project's own
+// package.json at the moment of the click, in a folder Server Manager already knows about.
+
+const LOG_DIR = path.join(DATA_DIR, 'logs');
+const START_WINDOW = 90 * 1000; // how long an app is shown as "Starting…" before giving up on it
+const FAILURE_SHOWN = 10 * 60 * 1000;
+const launches = new Map(); // id -> { child, at, log, command, exit: { code, signal, error, at } | null }
+
+function tailOf(file) {
+  try {
+    const fd = fs.openSync(file, 'r');
+    const size = fs.fstatSync(fd).size;
+    const len = Math.min(size, 4000);
+    const buf = Buffer.alloc(len);
+    fs.readSync(fd, buf, 0, len, size - len);
+    fs.closeSync(fd);
+    return buf.toString('utf8').replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').split('\n').map((l) => l.trimEnd().slice(0, 200)).filter(Boolean).slice(-8);
+  } catch {
+    return [];
+  }
+}
+
+function launchState(id) {
+  const l = launches.get(id);
+  if (!l) return {};
+  if (!l.exit) return Date.now() - l.at < START_WINDOW ? { starting: true } : {};
+  if (Date.now() - l.exit.at > FAILURE_SHOWN) return {};
+  return { failed: { code: l.exit.code, signal: l.exit.signal, error: l.exit.error || '', command: l.command, tail: tailOf(l.log) } };
+}
+
+async function startApp(id) {
+  const fail = (status, error) => ({ status, body: { error } });
+  if (!/^[0-9a-f]{12}$/.test(id)) return fail(404, 'Unknown app.');
+  const known = catalog().projects.find((p) => p.id === id);
+  const root = (known && known.root) || (store.apps[id] && store.apps[id].root);
+  if (!root || !fs.existsSync(path.join(root, 'package.json'))) return fail(404, 'That project is no longer on disk.');
+  if ((await inventory(false)).apps.some((a) => a.id === id)) return fail(409, 'It is already running.');
+  const previous = launches.get(id);
+  if (previous && !previous.exit && Date.now() - previous.at < START_WINDOW) return fail(409, 'It is already starting.');
+
+  let pkg;
+  try {
+    pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  } catch {
+    return fail(400, "This project's package.json could not be read.");
+  }
+  const script = ['dev', 'start', 'serve'].find((s) => pkg.scripts && pkg.scripts[s]);
+  if (!script) return fail(400, 'package.json has no dev, start or serve script.');
+
+  // The child gets a clean environment: not this server's own port or data folder, and not npm's variables.
+  const env = { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1', BROWSER: 'none' };
+  for (const key of Object.keys(env)) if (key.startsWith('npm_')) delete env[key];
+  for (const key of ['PORT', 'HOST', 'DATA_DIR', 'SCAN_DIRS']) delete env[key];
+  const nodeDir = path.dirname(process.execPath);
+  env.PATH = [nodeDir, '/opt/homebrew/bin', '/usr/local/bin', env.PATH || '/usr/bin:/bin:/usr/sbin:/sbin'].join(':');
+  const npm = fs.existsSync(path.join(nodeDir, 'npm')) ? path.join(nodeDir, 'npm') : 'npm';
+
+  fs.mkdirSync(LOG_DIR, { recursive: true });
+  const log = path.join(LOG_DIR, `${id}.log`);
+  const fd = fs.openSync(log, 'w');
+  const command = `npm run ${script}`;
+  fs.writeSync(fd, `$ ${command}   (in ${root})\n`);
+  const entry = { child: null, at: Date.now(), log, command, exit: null };
+  launches.set(id, entry);
+  try {
+    // Detached, so the app keeps running if Server Manager restarts.
+    const child = spawn(npm, ['run', script], { cwd: root, env, detached: true, stdio: ['ignore', fd, fd] });
+    entry.child = child;
+    child.on('error', (e) => { entry.exit = { code: null, signal: null, error: `Could not run npm: ${e.message}`, at: Date.now() }; scans.clear(); });
+    child.on('exit', (code, signal) => { entry.exit = { code, signal, error: '', at: Date.now() }; scans.clear(); });
+    child.unref();
+  } finally {
+    fs.closeSync(fd);
+  }
+  scans.clear();
+  return { status: 202, body: { ok: true, command } };
 }
 
 function shortCommand(command, root) {
@@ -659,6 +741,7 @@ async function buildInventory(includeAll) {
   }
 
   const runningIds = new Set(running.map((a) => a.id));
+  for (const id of runningIds) launches.delete(id); // it came up, so the launch is no longer news
   const usedBy = new Map();
   for (const a of running) for (const p of a.ports) usedBy.set(p.port, a.name);
   const found = catalog();
@@ -667,7 +750,7 @@ async function buildInventory(includeAll) {
 
   // Apps seen running before: show the ports they really used last time.
   for (const [id, entry] of Object.entries(store.apps)) {
-    if (runningIds.has(id) || !entry.lastSeen || !entry.root || entry.runtime !== 'node') continue;
+    if (runningIds.has(id) || !entry.lastSeen || !entry.root || entry.runtime !== 'node' || entry.root === __dirname) continue; // this server is running, by definition
     if (!fs.existsSync(entry.root)) continue;
     iconSources.set(id, { root: entry.root, primary: null });
     stopped.push(applyOverride({
@@ -705,6 +788,7 @@ async function buildInventory(includeAll) {
   }
   for (const a of stopped) {
     a.hidden = Boolean(store.apps[a.id] && store.apps[a.id].hidden);
+    Object.assign(a, launchState(a.id));
     for (const p of a.ports) if (usedBy.has(p.port)) p.usedBy = usedBy.get(p.port);
   }
   if (dirty) saveStore();
@@ -1000,6 +1084,12 @@ async function handle(req, res) {
     saveStore();
     scans.clear();
     return sendJson(res, 200, { ok: true });
+  }
+
+  if (parts[0] === 'api' && parts[1] === 'apps' && parts[2] && parts[3] === 'start' && req.method === 'POST') {
+    if (!isThisComputer(req)) return sendJson(res, 403, { error: 'Apps can only be started from the computer Server Manager runs on.' });
+    const result = await startApp(parts[2]);
+    return sendJson(res, result.status, result.body);
   }
 
   if (parts[0] === 'api' && parts[1] === 'apps' && parts[2] && parts[3] === 'unhide' && req.method === 'POST') {

@@ -13,6 +13,7 @@ Pick an easy port for Server Manager itself (it defaults to **1111**), bookmark 
 - **Knows each app.** Name, description and icon are detected for you, and you can change them.
 - **Shows how each port is exposed.** Every port is labelled **Local only** or **Local network**, and **HTTP** or **HTTPS**.
 - **Remembers apps that are not running.** Node projects in your project folders are listed with the port they use and the command that starts them, with a warning when that port is taken by something else.
+- **Starts them for you.** A **Start** button on those cards runs the project's `npm run dev` (or `start`), and shows the error output if it fails.
 - **Optional HTTPS and network access,** with a self-signed certificate that renews itself.
 
 ## Requirements
@@ -73,7 +74,16 @@ Each card is one app. A **running** card shows:
 
 Apps that are not running appear under **Not running** with the port from their config and the command that starts them. **Hide** removes one from the list, and **Show hidden** at the top brings hidden apps back.
 
-![Apps that are not running, with the ports they usually use and the command that starts them](docs/screenshots/not-running.png)
+![Apps that are not running, each with a Start button, and the error output of one that failed to start](docs/screenshots/not-running.png)
+
+### Starting an app
+
+**Start** runs the command shown on the card (`npm run dev`, or `npm start` / `npm run serve` when there is no `dev` script) in that project's folder. The button shows **Starting…** until the app is listening, and then the card moves up to the running apps. If the command stops straight away, the card shows its exit code and the last lines of its output, so you can see what went wrong. The full output is kept in `data/logs/`.
+
+- The page only sends the app's id. The command is read from that project's own `package.json` when you click, and only for projects Server Manager already lists.
+- It works only from the computer Server Manager runs on, so other devices on your network never see a Start button.
+- Apps run on their own, so they keep running if Server Manager restarts.
+- Apps do not get Server Manager's own `PORT`, `DATA_DIR` or `npm_*` variables. They do not get the variables from your shell's startup files either (for example in `~/.zshrc`), so an app that needs one should read it from its own `.env` file.
 
 The **Everything** switch lists every program listening on a port, not only Node apps. Press `/` to search by name, folder or port.
 
@@ -139,6 +149,7 @@ Files in `data/`:
 | `settings.json` | Port, network access and HTTPS. |
 | `apps.json` | Apps seen running, your custom names, descriptions and icons, and which apps are hidden. |
 | `icons/` | Uploaded icons. |
+| `logs/` | Output of the apps started from the page, one file per app (the last start). |
 | `tls/` | The certificate authority, the server certificate and their keys. |
 
 ## Development
@@ -147,7 +158,7 @@ Files in `data/`:
 npm test
 ```
 
-The tests start a real copy of the server in a temporary data folder and check the inventory, the request filtering and the switch to HTTPS. `openssl` must be on your path.
+The tests start a real copy of the server in a temporary data folder and check the inventory, the request filtering, starting an app (and showing why one failed to start) and the switch to HTTPS. `openssl` must be on your path.
 
 Server Manager's look follows the [Playlist Saver](https://github.com/langecornu/playlist-saver-app) design, in royal blue.
 

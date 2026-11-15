@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Start** button on every app that is not running. It runs the project's `npm run dev` (or `start` / `serve`), shows **Starting…** until the app is listening, and shows the exit code and last lines of output when it stops straight away. Only available on the computer Server Manager runs on.
+- Long folder paths no longer push a card wider than its column.
+- Package names with a display name (`productName`) keep their spacing.
+
 ## 1.0.0
 
 First public release.
